@@ -1,27 +1,31 @@
-# libraries
 from datetime import datetime
 from typing import Optional
+import os
 import math
-from tqdm import tqdm
-import pandas as pd
-import numpy as np
-
 import random
-
-import datasets
+import matplotlib.pyplot as plt
+import pickle
+import argparse
 import torch
-from pytorch_lightning import LightningDataModule, LightningModule, Trainer, seed_everything
-from torch.utils.data import DataLoader
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
 from transformers import (
-    AdamW,
     AutoConfig,
     AutoModelForSequenceClassification,
-    AutoModelForSeq2SeqLM,
     AutoTokenizer,
     get_linear_schedule_with_warmup,
 )
-from captum.attr import visualization as viz
-from captum.attr import LayerConductance, LayerIntegratedGradients
+from torch.optim import AdamW
+from captum.attr import LayerIntegratedGradients
+from pytorch_lightning import LightningDataModule, LightningModule, Trainer, seed_everything
+from torch.utils.data import DataLoader
+import datasets
+import nltk
+import string
+nltk.download('stopwords')
+from nltk.corpus import stopwords
+stop_words = set(stopwords.words('english'))
 
 
 
@@ -60,7 +64,7 @@ class DataModule(LightningDataModule):
         "sst2": "label",
         "SetFit/20_newsgroups": "label",
         "ag_news": "label",
-        "trec": "label-coarse",
+        "trec": "coarse_label",
         "emotion": "label",
         "hate": "label",
         "irony": "label",
@@ -110,8 +114,20 @@ class DataModule(LightningDataModule):
             self.task_label = self.task_label_map[dataset_name]
         
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name_or_path, 
-                                                       use_fast=True, 
-                                                       add_special_tokens=False)
+                                                       use_fast=True)
+
+        # try:
+        #     self.tokenizer = AutoTokenizer.from_pretrained(
+        #         self.model_name_or_path,
+        #         use_fast=False,  # Attempt to use the fast tokenizer
+        #         # add_special_tokens=True  # Avoid adding special tokens
+        #         )
+        # except ValueError:  # If there is an issue with the fast tokenizer
+        #     self.tokenizer = AutoTokenizer.from_pretrained(
+        #         self.model_name_or_path,
+        #         use_fast=False,  # Fall back to the slow tokenizer
+        #         add_special_tokens=False  # Avoid adding special tokens
+        #     )
 
     def setup(self, stage: str):
         print("setting up")
@@ -138,7 +154,7 @@ class DataModule(LightningDataModule):
         else:
             datasets.load_dataset(self.dataset_name)
         
-        AutoTokenizer.from_pretrained(self.model_name_or_path, use_fast=True, add_special_tokens=False)
+        AutoTokenizer.from_pretrained(self.model_name_or_path, use_fast=True)
 
     def train_dataloader(self):
         return DataLoader(self.dataset["train"], batch_size=self.train_batch_size, shuffle=True, num_workers=0)
@@ -268,7 +284,8 @@ class TCTransformers(LightningModule):
                 "weight_decay": 0.0,
             },
         ]
-        optimizer = AdamW(optimizer_grouped_parameters, lr=self.hparams.learning_rate, eps=self.hparams.adam_epsilon)
+        # optimizer = AdamW(optimizer_grouped_parameters, lr=self.hparams.learning_rate, eps=self.hparams.adam_epsilon)
+        optimizer = AdamW(params=optimizer_grouped_parameters, lr=self.hparams.learning_rate, eps=self.hparams.adam_epsilon)
 
         scheduler = get_linear_schedule_with_warmup(
             optimizer,
@@ -325,8 +342,7 @@ class integrated_gradients(object):
         self.text_field = text_field
         self.model_name_or_path = model_name_or_path
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name_or_path, 
-                                                       use_fast=True, 
-                                                       add_special_tokens=False)
+                                                       use_fast=True)
     
 
         
@@ -522,43 +538,43 @@ class integrated_gradients(object):
             
 
 
-def id2label(data_name, id_):
-    if data_name == 'glue':
-        if task_name == 'cola':
-            label_dict = {0: 'unacceptable', 1: 'acceptable'}
-        if task_name == 'sst2':
-            label_dict = {0: 'negative', 1: 'positive'}
+# def id2label(data_name, id_):
+#     if data_name == 'glue':
+#         if task_name == 'cola':
+#             label_dict = {0: 'unacceptable', 1: 'acceptable'}
+#         if task_name == 'sst2':
+#             label_dict = {0: 'negative', 1: 'positive'}
             
-    if data_name == 'tweets':
-        if task_name == 'emotion':
-            label_dict = {0: 'anger', 1: 'joy', 2: 'optimism', 3: 'sadness'}
-        if task_name == 'hate':
-            label_dict = {0: 'non-hate', 1: 'hate'}
-        if task_name == 'irony':
-            label_dict = {0: 'non-irony', 1: 'irony'}
-        if task_name == 'sentiment':
-            label_dict = {0: 'negative', 1: 'neutral', 2: 'positive'}
+#     if data_name == 'tweets':
+#         if task_name == 'emotion':
+#             label_dict = {0: 'anger', 1: 'joy', 2: 'optimism', 3: 'sadness'}
+#         if task_name == 'hate':
+#             label_dict = {0: 'non-hate', 1: 'hate'}
+#         if task_name == 'irony':
+#             label_dict = {0: 'non-irony', 1: 'irony'}
+#         if task_name == 'sentiment':
+#             label_dict = {0: 'negative', 1: 'neutral', 2: 'positive'}
             
-    if data_name == '20ng':
-        label_dict = {0: 'alt.atheism', 1: 'comp.graphics', 2: 'comp.os.ms-windows.misc', 3: 'comp.sys.ibm.pc.hardware', 
-                      4: 'comp.sys.mac.hardware', 5: 'comp.windows.x', 6: 'misc.forsale', 7: 'rec.autos', 
-                      8: 'rec.motorcycles', 9: 'rec.sport.baseball', 10: 'rec.sport.hockey', 11: 'sci.crypt',
-                     12: 'sci.electronics', 13: 'sci.med', 14: 'sci.space', 15: 'soc.religion.christian', 
-                      16: 'talk.politics.guns', 17: 'talk.politics.mideast', 18: 'talk.politics.misc', 
-                      19: 'talk.religion.misc'}
+#     if data_name == '20ng':
+#         label_dict = {0: 'alt.atheism', 1: 'comp.graphics', 2: 'comp.os.ms-windows.misc', 3: 'comp.sys.ibm.pc.hardware', 
+#                       4: 'comp.sys.mac.hardware', 5: 'comp.windows.x', 6: 'misc.forsale', 7: 'rec.autos', 
+#                       8: 'rec.motorcycles', 9: 'rec.sport.baseball', 10: 'rec.sport.hockey', 11: 'sci.crypt',
+#                      12: 'sci.electronics', 13: 'sci.med', 14: 'sci.space', 15: 'soc.religion.christian', 
+#                       16: 'talk.politics.guns', 17: 'talk.politics.mideast', 18: 'talk.politics.misc', 
+#                       19: 'talk.religion.misc'}
         
-    if data_name == 'agnews':
-        label_dict = {0: 'World', 1: 'Sports', 2: 'Business', 3: 'Sci/Tech'}
+#     if data_name == 'agnews':
+#         label_dict = {0: 'World', 1: 'Sports', 2: 'Business', 3: 'Sci/Tech'}
         
-    if data_name == 'trec':
-        label_dict = {0: 'ABBR', 1: 'ENTY', 2: 'DESC', 3: 'DESC', 4: 'LOC', 
-                      5: 'NUM'}
+#     if data_name == 'trec':
+#         label_dict = {0: 'ABBR', 1: 'ENTY', 2: 'DESC', 3: 'DESC', 4: 'LOC', 
+#                       5: 'NUM'}
         
-    if data_name == 'yelp':
-        label_dict = {0: '1 star', 1: '2 star', 2: '3 star', 3: '4 star', 4: '5 star'}
+#     if data_name == 'yelp':
+#         label_dict = {0: '1 star', 1: '2 star', 2: '3 star', 3: '4 star', 4: '5 star'}
             
     
-    return label_dict[id_]
+#     return label_dict[id_]
 
 
 def label_word_counts(dm, split, tokenizer, label):
@@ -574,10 +590,6 @@ def label_word_counts(dm, split, tokenizer, label):
     word_counts = pd.value_counts(np.array(words))
     
     return word_counts 
-
-
-# from TalSchuster/FeverSymmetric github repo, they dont take unique word counts, 
-# they take total word counts (not unique) and total label occurrences (not unique)
 
 
 def get_count_dicts(dm, labels, split, tokenizer):
@@ -622,3 +634,212 @@ def get_lmi(word, label, word_dict, label_dict, total_word_count):
 def get_topk_head(lmi_label, k):
     topk = round(len(lmi_label)*k)   
     return lmi_label[:topk+1]
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Run calibration experiment.')
+    parser.add_argument('--data_name', type=str, required=True,
+                        help='Dataset name (e.g., glue, 20ng, agnews)')
+    parser.add_argument('--task_name', type=str, nargs='?', const=None,
+                        help='Task name (for datasets like GLUE or TweetEval)')
+    parser.add_argument('--model_name', type=str, required=True,
+                        help='Model to finetune (e.g., bert, roberta)')
+    return parser.parse_args()
+
+
+def get_tokenizer(model_name):
+    model_keys = {
+        "bert": "bert-base-uncased",
+        "roberta": "roberta-base",
+        "bart": "facebook/bart-base",
+        "deberta": "microsoft/deberta-base",
+        "albert": "albert-base-v1",
+    }
+    return AutoTokenizer.from_pretrained(model_keys[model_name]), model_keys
+
+
+def get_dataset_key(data_name):
+    dataset_keys = {
+        "glue": "glue",
+        "20ng": "SetFit/20_newsgroups",
+        "agnews": "ag_news",
+        "trec": "trec",
+        "tweets": "tweet_eval",
+    }
+    return dataset_keys[data_name]
+
+
+def label_lmi(dm, tokenizer):
+    labels = list(range(dm.num_labels))
+    total_word_count, word_dict, label_dict = get_count_dicts(dm, labels, split='train', tokenizer=tokenizer)
+
+    lmi_label, lmi_word = {}, {}
+    for label in label_dict.keys():
+        lmi = []
+        for word in tqdm(word_dict.keys()):
+            if label in word_dict[word]:
+                lmi_, count_w = get_lmi(word, label, word_dict, label_dict, total_word_count)
+                lmi_word.setdefault(label, {})[word] = lmi_
+                lmi.append((word, count_w, lmi_))
+        lmi.sort(key=lambda x: x[2], reverse=True)
+        lmi_label[label] = lmi
+    return {label: get_topk_head(lmi_label[label], k=0.05) for label in lmi_label}
+
+
+def run_experiment(args):
+    tokenizer, model_keys = get_tokenizer(args.model_name)
+    dataset_key = get_dataset_key(args.data_name)
+    predict_split = "validation" if args.data_name == "glue" else "test"
+
+    dm = DataModule(model_keys[args.model_name], dataset_name=dataset_key,
+                    task_name=args.task_name, predict_split=predict_split)
+    dm.prepare_data()
+    dm.setup("fit")
+
+    topk = label_lmi(dm, tokenizer)
+    # save the topk results
+    save_lmi(args, topk)
+
+    seed_everything(42, workers=True)
+    model = TCTransformers(
+        model_name_or_path=model_keys[args.model_name],
+        num_labels=dm.num_labels,
+        eval_splits=dm.eval_splits,
+        data_name=dm.dataset_name,
+        task_name=dm.task_name,
+        learning_rate=1e-5,
+        gradient_clip_val=1,
+        weight_decay=0,
+    )
+
+    trainer = Trainer(
+        max_epochs=3,
+        accelerator="auto",
+        devices=[0] if torch.cuda.is_available() else 0,
+        enable_checkpointing=False,
+        logger=False,
+    )
+
+    results = {}
+    print("Evaluating pretrained model...")
+    results['before'] = compile_results(trainer.predict(model, dm), dm, predict_split=predict_split)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    attributed_results = {
+        'before': integrated_gradients(
+            results=results['before'],
+            topk=topk,
+            model_name_or_path=model_keys[args.model_name],
+            text_field=dm.text_fields[0],
+            device=device,
+            model=model
+        ).get_attributions()
+    }
+
+    print("Training model...")
+    trainer.fit(model, dm)
+    results['after'] = compile_results(trainer.predict(model, dm), dm, predict_split=predict_split)
+
+    print("Evaluating finetuned model...")
+    attributed_results['after'] = integrated_gradients(
+        results=results['after'],
+        topk=topk,
+        model_name_or_path=model_keys[args.model_name],
+        text_field=dm.text_fields[0],
+        device=device,
+        model=model
+    ).get_attributions()
+
+    save_results(args, attributed_results)
+
+
+def save_lmi(args, topk):
+    results_dir = f"results_{args.data_name}/{args.model_name}"
+    os.makedirs(results_dir, exist_ok=True)
+
+    prefix = args.task_name if args.data_name in ["glue", "tweets"] else args.data_name
+    out_file = os.path.join(results_dir, f"lmi_{prefix}_{args.model_name}.pickle")
+
+    with open(out_file, 'wb') as f:
+        pickle.dump(topk, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    print(f"LMI results saved to {out_file}")
+
+def save_results(args, attributed_results):
+    results_dir = f"results_{args.data_name}/{args.model_name}"
+    os.makedirs(results_dir, exist_ok=True)
+
+    prefix = args.task_name if args.data_name in ["glue", "tweets"] else args.data_name
+
+    for phase in ["before", "after"]:
+        out_file = os.path.join(results_dir, f"{prefix}_{args.model_name}_{phase}.pickle")
+        with open(out_file, 'wb') as f:
+            pickle.dump(attributed_results[phase], f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    print(f"Results saved to {results_dir}")
+
+
+
+def identify_token_type(token, model, t):
+    if model == 'bert':
+        if token in string.punctuation:
+            return 'punctuation'
+        elif token in stop_words:
+            return 'stopword'
+        elif "#" in token:
+            return 'subword'
+        elif token in ['[CLS]', '[SEP]']:
+            return 'eos'
+        else:
+            return 'word'
+        
+    if model in ['roberta', 'bart', 'deberta']:
+        if t == 0:
+            if token in string.punctuation:
+                return 'punctuation'
+            elif token in stop_words:
+                return 'stopword'
+            elif token in ['[CLS]', '[SEP]']:
+                return 'eos'
+            else:
+                return 'word'
+        else:
+            if 'Ġ' in token:
+                token = token.replace('Ġ', '') 
+                if token in string.punctuation:
+                    return 'punctuation'
+                elif token in stop_words:
+                    return 'stopword'
+                elif token in ['[CLS]', '[SEP]']:
+                    return 'eos'
+                else:
+                    return 'word'
+            else:
+                if token in string.punctuation:
+                    return 'punctuation'
+                else:
+                    return 'subword'
+            
+    if model == 'albert':
+        if t == 0:
+            if token in string.punctuation:
+                return 'punctuation'
+            elif token in stop_words:
+                return 'stopword'
+            elif token in ['[CLS]', '[SEP]']:
+                return 'eos'
+            else:
+                return 'word'
+        else:
+            if '▁' in token:
+                token = token.replace('▁', '') 
+                if token in string.punctuation:
+                    return 'punctuation'
+                elif token in stop_words:
+                    return 'stopword'
+                elif token in ['[CLS]', '[SEP]']:
+                    return 'eos'
+                else:
+                    return 'word'
+            else:
+                return 'subword'    
